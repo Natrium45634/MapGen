@@ -199,6 +199,24 @@ void runTectonics(StageContext& ctx) {
         }
     }, &ctx.cancel);
     double tau = areaWeightedQuantile(g, contField, 1.0 - crustFrac);
+    // Remove specks: continental fragments and oceanic holes smaller than ~3 cells / 20 000 km² are flipped
+    // (they would become isolated needles of continental-slope relief).
+    {
+        const double minArea = std::max(20000.0 * sqr(R / 6371.0), 3.0 * g.cellAreaKm2(H / 2));
+        for (int pass = 0; pass < 2; ++pass) {
+            std::vector<uint8_t> m(static_cast<size_t>(g.size()));
+            for (int64_t k = 0; k < g.size(); ++k) m[static_cast<size_t>(k)] = (contField[static_cast<size_t>(k)] > tau) == (pass == 0);
+            std::vector<int32_t> lab;
+            int nc = connectedComponents(g, m.data(), lab);
+            std::vector<double> ar(static_cast<size_t>(nc), 0.0);
+            for (int64_t k = 0; k < g.size(); ++k) if (lab[static_cast<size_t>(k)] >= 0) ar[static_cast<size_t>(lab[static_cast<size_t>(k)])] += g.cellAreaKm2(g.row(k));
+            for (int64_t k = 0; k < g.size(); ++k) {
+                int32_t c = lab[static_cast<size_t>(k)];
+                if (c >= 0 && ar[static_cast<size_t>(c)] < minArea)
+                    contField[static_cast<size_t>(k)] = static_cast<float>(pass == 0 ? tau - 0.01 : tau + 0.01);
+            }
+        }
+    }
     ctx.progress(0.3, "континентальная кора");
 
     // Per-plate continental fraction -> slower continental plates, rigidity.

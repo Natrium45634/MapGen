@@ -336,7 +336,8 @@ void runGeomorphology(StageContext& ctx) {
         for (int64_t k = 0; k < N; ++k) {
             bool cont = crust[k] == kCrustContinental;
             double target = cont ? 175.0 : 120.0;
-            if (dSub[k] < 2000 && std::fabs(dSub[k] - target) < tol && conv[k] > 1.0) cand.push_back({hashUniform(key, static_cast<uint64_t>(k)), k});
+            // Not next to a trench where this plate itself subducts (a plate can override one margin and sink at another).
+            if (dSub[k] < 2000 && std::fabs(dSub[k] - target) < tol && conv[k] > 1.0 && dTr[k] > 200) cand.push_back({hashUniform(key, static_cast<uint64_t>(k)), k});
             else if (cont && dRid[k] > 15 && dRid[k] < 90 && divr[k] > 0.8 && hashUniform(key, static_cast<uint64_t>(k), 7) < 0.25)
                 cand.push_back({hashUniform(key, static_cast<uint64_t>(k), 1) + 2.0, k});  // rift volcanoes after arcs
         }
