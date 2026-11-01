@@ -1,0 +1,8 @@
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.tif binary
+*.geoworld binary
+# Files read on Windows keep CRLF.
+packaging/*.iss text eol=crlf
+packaging/*.rc.in text eol=crlf

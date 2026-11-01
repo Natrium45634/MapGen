@@ -1,0 +1,213 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  APP_VERSION: 1.0.0
+  QT_VERSION: 6.8.3
+
+jobs:
+  linux:
+    # Engine tests (P0 gate), statistical batch, UI tests offscreen, CLI self-test, sample maps.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependencies (Qt 6, Mesa, Catch2)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qt6-base-dev libgl1-mesa-dev libglx-mesa0 libgl1-mesa-dri catch2 ninja-build > /dev/null
+
+      - name: Version matches the project
+        run: grep -q "VERSION ${APP_VERSION}" CMakeLists.txt
+
+      - name: Configure and build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+      - name: P0 tests (unit, invariants, determinism, UI)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build --output-on-failure -R "^(unit|slow|golden|ui)$"
+
+      - name: Statistical tests (100+ seeds)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build --output-on-failure -R "^statistics$"
+
+      - name: CLI self-test and sample world
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          ./build/app/mapgen-cli selftest --dir selftest | tee selftest.log
+          grep -q "SELFTEST: OK" selftest.log
+          ./build/app/mapgen-cli generate --seed A7Test42 --res preview --out A7Test42.geoworld --export samples
+          ./build/app/mapgen-cli probe A7Test42.geoworld --lat 10 --lon 20 --month 6
+
+      - name: Benchmark (preview, standard)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ./build/benchmarks/mapgen_bench --res preview,standard | tee benchmark-linux.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MapGen-linux-samples
+          path: |
+            samples/
+            benchmark-linux.md
+            selftest.log
+
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Qt ${{ env.QT_VERSION }} (MSVC 2022 x64)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: Configure and build (MSVC, Ninja, Release)
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          cmake --build build
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: P0 tests (unit, invariants, determinism, UI)
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          ctest --test-dir build --output-on-failure -R "^(unit|slow|golden|ui)$"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Deploy (windeployqt, MSVC runtime, docs, licences)
+        shell: pwsh
+        run: |
+          $d = "dist\MapGen"
+          New-Item -ItemType Directory -Force $d | Out-Null
+          Copy-Item build\app\MapGen.exe, build\app\mapgen-cli.exe $d
+          windeployqt --release --no-translations --no-system-d3d-compiler --no-quick-import "$d\MapGen.exe"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          windeployqt --release --no-translations --no-system-d3d-compiler --no-quick-import "$d\mapgen-cli.exe"
+          $crt = Get-ChildItem -Path "$env:VCToolsRedistDir" -Recurse -Filter "Microsoft.VC143.CRT" | Where-Object { $_.FullName -match "\\x64\\" } | Select-Object -First 1
+          if (-not $crt) { Write-Error "MSVC runtime not found"; exit 1 }
+          Copy-Item "$($crt.FullName)\*.dll" $d
+          New-Item -ItemType Directory -Force "$d\docs", "$d\examples" | Out-Null
+          Copy-Item README.md, CHANGELOG.md, THIRD_PARTY_LICENSES.md $d
+          Copy-Item docs\*.md "$d\docs"
+          Copy-Item examples\* "$d\examples" -Recurse
+          Get-ChildItem $d | Format-Table Name, Length
+
+      - name: Self-test of the deployed exe (clean PATH, no Qt from the runner)
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\Windows\System32;C:\Windows"
+          $p = Start-Process -FilePath dist\MapGen\MapGen.exe -ArgumentList '--selftest','--dir',"$PWD\st1" `
+               -NoNewWindow -Wait -PassThru -RedirectStandardOutput selftest-gui.log
+          Get-Content selftest-gui.log
+          if ($p.ExitCode -ne 0) { Write-Error "selftest exit code $($p.ExitCode)"; exit 1 }
+          if (-not (Select-String -Path selftest-gui.log -Pattern 'SELFTEST: OK' -Quiet)) { exit 1 }
+          & dist\MapGen\mapgen-cli.exe selftest --dir "$PWD\st2" | Tee-Object selftest-cli.log
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & dist\MapGen\mapgen-cli.exe generate --seed A7Test42 --res preview --out "$PWD\A7Test42.geoworld"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & dist\MapGen\mapgen-cli.exe probe "$PWD\A7Test42.geoworld" --lat 10 --lon 20 --month 6
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Benchmark (preview, standard)
+        shell: pwsh
+        run: |
+          & build\benchmarks\mapgen_bench.exe --res preview,standard | Tee-Object benchmark-windows.md
+
+      - name: Portable zip
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\MapGen -DestinationPath "dist\MapGen-$env:APP_VERSION-Portable-x64.zip" -Force
+          Get-Item "dist\MapGen-$env:APP_VERSION-Portable-x64.zip" | Format-List Name, Length
+
+      - name: Installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          if (-not (Test-Path $iscc)) { $iscc = (Get-Command iscc -ErrorAction Stop).Source }
+          & $iscc /Qp "/DAppVersion=$env:APP_VERSION" "/DSourceDir=$PWD\dist\MapGen" "/DOutputDir=$PWD\dist" packaging\MapGen.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Silent install, self-test of the installed exe, uninstall
+        shell: pwsh
+        run: |
+          $setup = "dist\MapGen-$env:APP_VERSION-Setup.exe"
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\MapGen'
+          $p = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER','/TASKS=desktopicon,assoc','/LOG=install.log' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content install.log -Tail 40; Write-Error "setup exit code $($p.ExitCode)"; exit 1 }
+          foreach ($f in 'MapGen.exe','mapgen-cli.exe','Qt6Core.dll','Qt6Widgets.dll','unins000.exe','docs\USER_GUIDE_RU.md','THIRD_PARTY_LICENSES.md') {
+            if (-not (Test-Path (Join-Path $dir $f))) { Write-Error "not installed: $f"; exit 1 }
+          }
+          $env:PATH = "C:\Windows\System32;C:\Windows"
+          $t = Start-Process -FilePath (Join-Path $dir 'MapGen.exe') -ArgumentList '--selftest','--dir',"$PWD\st3" `
+               -NoNewWindow -Wait -PassThru -RedirectStandardOutput installed-selftest.log -WorkingDirectory $dir
+          Get-Content installed-selftest.log
+          if ($t.ExitCode -ne 0) { Write-Error "installed selftest exit code $($t.ExitCode)"; exit 1 }
+          if (-not (Select-String -Path installed-selftest.log -Pattern "MapGen $env:APP_VERSION" -Quiet)) { Write-Error 'wrong version'; exit 1 }
+          $u = Start-Process -FilePath (Join-Path $dir 'unins000.exe') -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
+          for ($i = 0; $i -lt 60 -and (Test-Path (Join-Path $dir 'MapGen.exe')); $i++) { Start-Sleep -Seconds 1 }
+          if (Test-Path (Join-Path $dir 'MapGen.exe')) { Write-Error 'uninstall left the program'; exit 1 }
+          Write-Host "Install, self-test and uninstall: OK"
+
+      - name: Portable zip runs from an unpacked folder
+        shell: pwsh
+        run: |
+          Expand-Archive "dist\MapGen-$env:APP_VERSION-Portable-x64.zip" -DestinationPath portable-test -Force
+          $env:PATH = "C:\Windows\System32;C:\Windows"
+          & portable-test\MapGen\mapgen-cli.exe selftest --dir "$PWD\st4"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MapGen-windows-x64
+          path: |
+            dist/MapGen-${{ env.APP_VERSION }}-Setup.exe
+            dist/MapGen-${{ env.APP_VERSION }}-Portable-x64.zip
+            benchmark-windows.md
+            selftest-gui.log
+
+  release:
+    # GitHub Release with the installer and the portable zip: on a commit marked [release] or by hand.
+    needs: [linux, windows]
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[release]'))
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: MapGen-windows-x64
+          path: release
+      - name: Publish v${{ env.APP_VERSION }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          find release -type f -exec ls -la {} \;
+          tag="v${APP_VERSION}"
+          gh release delete "$tag" --cleanup-tag -y || true
+          gh release create "$tag" --target "$GITHUB_SHA" --title "MapGen ${APP_VERSION}" --notes-file docs/RELEASE_NOTES.md \
+            release/dist/MapGen-${APP_VERSION}-Setup.exe \
+            release/dist/MapGen-${APP_VERSION}-Portable-x64.zip

@@ -1,0 +1,2 @@
+add_executable(mapgen_bench bench_main.cpp)
+target_link_libraries(mapgen_bench PRIVATE mapgen_app)
