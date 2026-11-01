@@ -9,7 +9,9 @@
 namespace mapgen {
 
 int climateGridWidth(int fullWidth) {
-    int w = std::clamp(fullWidth / 2, 64, 512);
+    // The same 384×192 (~0.94°) climate grid for Preview and above, so that resolutions share the climate.
+    if (fullWidth >= 768) return 384;
+    int w = std::clamp(fullWidth / 2, 64, 384);
     return w - (w % 2);
 }
 

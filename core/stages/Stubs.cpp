@@ -2,7 +2,6 @@
 #include "core/stages/Stage.h"
 
 namespace mapgen {
-void runClimate(StageContext&) {}
 void runHydrology(StageContext&) {}
 void runBiomes(StageContext&) {}
 void runGeoActivity(StageContext&) {}

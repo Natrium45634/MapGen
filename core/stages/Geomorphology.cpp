@@ -201,9 +201,9 @@ void runGeomorphology(StageContext& ctx) {
                 double wdt = 230.0 + 160.0 * std::min(cf, 1.3);
                 uplift += M * (3300.0 + 3200.0 * std::min(cf, 1.4)) * gauss(dc, wdt);
                 double rig = plates[static_cast<size_t>(pid)].rigidity;
-                if (rig < 1.05 && conv[k] > 2.5) {
-                    double wp = 450.0 + 450.0 * smoothstep(2.5, 7.0, conv[k]);
-                    uplift += M * 3000.0 * (1.0 - smoothstep(0.65 * wp, wp, dc)) * smoothstep(0.0, 120.0, dc) * smoothstep(2.5, 6.0, conv[k]);
+                if (rig < 1.0 && conv[k] > 4.0) {
+                    double wp = 300.0 + 400.0 * smoothstep(4.0, 9.0, conv[k]);
+                    uplift += M * 2400.0 * (1.0 - smoothstep(0.6 * wp, wp, dc)) * smoothstep(0.0, 120.0, dc) * smoothstep(4.0, 7.0, conv[k]);
                 }
                 e -= 380.0 * gauss(dc - 1.7 * wdt, 130.0);  // foreland basin
                 if (uplift > 1200 && dc < 900) gn = (uplift > 3500 && dc > wdt) ? kGenPlateau : kGenCollisionOrogen;
@@ -246,7 +246,7 @@ void runGeomorphology(StageContext& ctx) {
                 uplift *= 0.6 + 0.7 * nRidge.ridged(p, 20, 6, 2.1, 0.55);
             }
             // Isostatic saturation: stacked uplifts approach a crustal-thickness limit instead of adding up.
-            const double uMax = 6200.0 * M;
+            const double uMax = 5600.0 * M;
             uplift = uMax * (1.0 - std::exp(-uplift / uMax));
             e += uplift;
             mountainMask[static_cast<size_t>(k)] = static_cast<float>(mm);
